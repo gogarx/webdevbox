@@ -6,12 +6,9 @@ RUN pacman-key --init \
     && sed 's/NoProgressBar/#NoProgressBar/g' -i /etc/pacman.conf
 
 # update mirrorlist
-#ADD https://raw.githubusercontent.com/greyltc/docker-archlinux/master/get-new-mirrors.sh /usr/bin/get-new-mirrors
-#RUN chmod +x /usr/bin/get-new-mirrors
-#RUN get-new-mirrors
 RUN sed -i 's/^Server = https:\/\/.*/Server = https:\/\/archlinux.c3sl.ufpr.br\/$repo\/os\/$arch/' /etc/pacman.d/mirrorlist
 
-RUN pacman -Syyu --noconfirm \
+RUN pacman -Syyu --needed --noconfirm \
         aardvark-dns \
         apparmor \
         atuin \
@@ -40,10 +37,12 @@ RUN pacman -Syyu --noconfirm \
         lsof \
         jdk11-openjdk \
         jdk8-openjdk \
+        java-runtime-common \
+        fakeroot \
+        debugedit \
         jq \
         mariadb-clients \
         memcached \
-        neovim \
         opencv \
         openssh \
         pgcli \
@@ -51,7 +50,6 @@ RUN pacman -Syyu --noconfirm \
         podman \
         podman-compose \
         podman-docker \
-        podman-dnsname \
         postgresql-libs \
         procs \
         redis \
@@ -75,12 +73,10 @@ RUN pacman -Syyu --noconfirm \
         zsh-completions \
         zsh-history-substring-search \
         zsh-syntax-highlighting \
-        zsh-theme-powerlevel10k \
-    ; pacman -Rns $(pacman -Qtdq) \
-    ; pacman -Scc --noconfirm \
-    ; rm -Rf /var/cache/pacman/pkg/*
-
-RUN archlinux-java set java-8-openjdk
+    && archlinux-java set java-8-openjdk \
+    && { pacman -Rns --noconfirm $(pacman -Qtdq) || echo "Nothing to remove"; } \
+    && pacman -Scc --noconfirm \
+    && rm -Rf /var/cache/pacman/pkg/*
 
 # optional directory to mount the host's home directory
 RUN mkdir -p /mnt/host
@@ -90,7 +86,7 @@ FROM update-mirrors as build-helper-img
 ARG AUR_USER=builduser
 ARG HELPER=yay
 ARG LUNARVIM_VERSION=1.3
-ARG NEOVIM_VERSION=0.9
+ARG NEOVIM_VERSION=0.9.5
 
 ADD helpers/add-aur.sh /root
 RUN bash /root/add-aur.sh ${AUR_USER} ${HELPER}
@@ -116,43 +112,72 @@ RUN aur-install \
         wrk \
         zsh-git-prompt \
         zsh-vi-mode \
-    ; pacman -Rns $(pacman -Qtdq) \
+    ; pacman -D --asexplicit asdf-vm \
+    ; pacman -Rns $(pacman -Qtdq) || echo "Nothing to remove" \
     ; pacman -Scc --noconfirm \
     ; rm -Rf .cache/yay/* \
     ; rm -Rf /var/cache/foreign-pkg/*
 
-RUN source /opt/asdf-vm/asdf.sh \
-    && asdf plugin-add crystal \
-    && asdf plugin-add dotnet-core \
-    && asdf plugin-add elixir \
-    && asdf plugin-add erlang \
-    && asdf plugin-add golang \
-    && asdf plugin-add haskell \
-    && asdf plugin-add java \
-    && asdf plugin-add julia \
-    && asdf plugin-add kotlin \
-    && asdf plugin-add lua \
-    && asdf plugin-add nim \
-    && asdf plugin-add nodejs \
-    && asdf plugin-add php \
-    && asdf plugin-add python \
-    && asdf plugin-add ruby \
-    && asdf plugin-add rust \
-    && asdf plugin-add scala \
-    && asdf plugin-add zig \
-    && asdf plugin-add python
+# STEP 9 em diante: Sintaxe atualizada para o ASDF v0.20+ (sem hifens)
+RUN asdf plugin add crystal \
+    && asdf plugin add dotnet-core \
+    && asdf plugin add elixir \
+    && asdf plugin add erlang \
+    && asdf plugin add golang \
+    && asdf plugin add haskell \
+    && asdf plugin add java \
+    && asdf plugin add julia \
+    && asdf plugin add kotlin \
+    && asdf plugin add lua \
+    && asdf plugin add nim \
+    && asdf plugin add nodejs \
+    && asdf plugin add php \
+    && asdf plugin add python \
+    && asdf plugin add ruby \
+    && asdf plugin add rust \
+    && asdf plugin add scala \
+    && asdf plugin add zig
 
-RUN source /opt/asdf-vm/asdf.sh && asdf install python latest && asdf install nodejs latest && asdf global python latest && asdf global nodejs latest
+# STEP 10/28 corrigido: Usando a nova sintaxe 'asdf set -u' para definir as versões globais
+RUN asdf install python latest \
+    && asdf install nodejs latest \
+    && asdf set -u python latest \
+    && asdf set -u nodejs latest
 
-RUN source /opt/asdf-vm/asdf.sh && LV_BRANCH="release-${LUNARVIM_VERSION}/neovim-${NEOVIM_VERSION}" \
-    bash <(curl -s https://raw.githubusercontent.com/lunarvim/lunarvim/master/utils/installer/install.sh) -y
+# Configuração global do Git ANTES do instalador do LunarVim: o repositório
+# jose-elias-alvarez/null-ls.nvim foi removido do GitHub (o 404 faz o git pedir
+# credenciais e o lazy.nvim aborta com "terminal prompts disabled"), então o
+# insteadOf redireciona para o fork vivo nvimtools/none-ls.nvim, que preserva o
+# módulo lua/null-ls (drop-in). A segunda linha normaliza URLs SSH para HTTPS.
+RUN git config --global url."https://github.com/nvimtools/none-ls.nvim".insteadOf "https://github.com/jose-elias-alvarez/null-ls.nvim" \
+    && git config --global url."https://github.com/".insteadOf "git@github.com:"
 
-RUN mkdir -p /etc/skel/.local/share \
-    && mkdir -p /etc/skel/.local/bin \
+# STEP 11/28: Neovim fixado em 0.9.5 via tarball oficial do GitHub (em /opt/nvim-linux64),
+# pois o pacote do Arch instala sempre a versão mais recente, que quebra o LunarVim com
+# erro de tree-sitter (query_predicates). O LunarVim também é fixado no branch estável
+# release-1.3/neovim-0.9 (via LV_BRANCH), pois o master exige Neovim 0.10+. O python-pip
+# e o env PIP_BREAK_SYSTEM_PACKAGES=1 viabilizam o pynvim do instalador apesar do PEP 668
+# do Arch, sem o qual o script morre silenciosamente sob set -e. O nodejs e o npm explícitos
+# suprem o Mason, pois o Arch separou o npm do nodejs (agora é só optdepends).
+RUN curl -fsSL https://github.com/neovim/neovim/releases/download/v${NEOVIM_VERSION}/nvim-linux64.tar.gz -o /tmp/nvim-linux64.tar.gz \
+    && tar -xzf /tmp/nvim-linux64.tar.gz -C /opt \
+    && rm -f /tmp/nvim-linux64.tar.gz \
+    && ln -sf /opt/nvim-linux64/bin/nvim /usr/local/bin/nvim \
+    && pacman -S --needed --noconfirm git make gcc cliphist python-pip nodejs npm \
+    && PIP_BREAK_SYSTEM_PACKAGES=1 LV_BRANCH="release-${LUNARVIM_VERSION}/neovim-0.9" bash <(curl -s "https://raw.githubusercontent.com/lunarvim/lunarvim/release-${LUNARVIM_VERSION}/neovim-0.9/utils/installer/install.sh") -y
+
+# STEP 12: Esqueleto LEVE em /etc/skel — o distrobox-init percorre /etc/skel arquivo a
+# arquivo a cada boot do contêiner, então árvores pesadas lá custam MINUTOS de inicialização
+# (677 MB de .asdf + 89 MB de lunarvim afogavam o init). As árvores pesadas passam a ser
+# fonte de resgate em /opt/webdevbox-defaults, para cópia manual à home persistida (padrão
+# da Terceira Batalha). No skel ficam só os arquivos pequenos: shim lvim e configs.
+RUN mkdir -p /etc/skel/.local/bin \
     && mkdir -p /etc/skel/.config/lvim \
-    && mv /root/.local/share/lunarvim /etc/skel/.local/share/lunarvim \
+    && mkdir -p /opt/webdevbox-defaults/.local/share \
+    && mv /root/.local/share/lunarvim /opt/webdevbox-defaults/.local/share/lunarvim \
+    && mv /root/.asdf /opt/webdevbox-defaults/asdf \
     && mv /root/.local/bin/lvim /etc/skel/.local/bin/lvim \
-    && mv /root/.asdf /etc/skel/ \
+    && cp /etc/skel/.local/bin/lvim /usr/local/bin/lvim \
     && sed 's/\/root/$HOME/g' -i /etc/skel/.local/bin/lvim
 
 COPY helpers/config.lua /etc/skel/.config/lvim
@@ -178,10 +203,11 @@ RUN chown podman:podman -R /home/podman
 
 # chmod containers.conf and adjust storage.conf to enable Fuse storage.
 RUN chmod 644 /etc/containers/containers.conf \
-    ; sed -i -e 's|^#mount_program|mount_program|g' \
-    -e '/additionalimage.*/a "/var/lib/shared",' \
-    -e 's|^mountopt[[:space:]]*=.*$|mountopt = "nodev,fsync=0"|g' \
-    -e '/#ignore_chown_errors = false/ignore_chown_errors = true/g' \
+    ; test -f /etc/containers/storage.conf || cp /usr/share/containers/storage.conf /etc/containers/storage.conf \
+    ; sed -i -e 's|^#mount_program = .*|mount_program = "/usr/bin/fuse-overlayfs"|' \
+    -e 's|^# additionalimagestores = .*|additionalimagestores = ["/var/lib/shared"]|' \
+    -e 's|^mountopt = .*|mountopt = "nodev,fsync=0"|' \
+    -e 's|^#ignore_chown_errors = .*|ignore_chown_errors = "true"|' \
     /etc/containers/storage.conf
 
 RUN mkdir -p /var/lib/shared/overlay-images \
@@ -195,7 +221,10 @@ RUN mkdir -p /var/lib/shared/overlay-images \
 
 ENV _CONTAINERS_USERNS_CONFIGURED=""
 
-RUN echo "source /opt/asdf-vm/asdf.sh" >> /etc/profile ;\
-    sed 's/PATH=/PATH=$HOME\/.local\/bin/g' -i /etc/profile
+# STEP 27/28: adiciona ~/.local/bin ao PATH de login de forma limpa, inserindo a chamada
+# de append_path ANTES do 'unset -f append_path' que o perfil moderno do Arch executa no
+# final. (O antigo sed 's/PATH=/.../' mutilava a função e colava o caminho sem separador;
+# o source de /opt/asdf-vm/asdf.sh foi removido: o asdf novo é binário Go em /usr/bin/asdf.)
+RUN sed -i '/^unset -f append_path$/i append_path "$HOME/.local/bin"' /etc/profile
 
 CMD ["/bin/zsh"]

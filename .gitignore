@@ -1,0 +1,2 @@
+# build/debug logs (podman build output is redirected here during stabilization)
+arquivos.txt

@@ -15,8 +15,8 @@ HELPER="${2:-yay}"
 #mv /tmp/get-new-mirrors /bin/.
 #get-new-mirrors
 
-# we're gonna need sudo to use the helper properly
-pacman --sync --needed --noconfirm --noprogressbar sudo || echo "Nothing to do"
+# we're gonna need sudo and compilation tools to use the helper properly in 2026
+pacman --sync --needed --noconfirm --noprogressbar sudo base-devel fakeroot debugedit binutils || echo "Nothing to do"
 
 # create the user
 AUR_USER_HOME="/var/${AUR_USER}"
